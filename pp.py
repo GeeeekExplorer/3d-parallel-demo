@@ -6,15 +6,15 @@ from model import Net
 
 class Send(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, output, rank):
+    def forward(ctx, input, rank):
         ctx.rank = rank
-        dist.send(output, rank + 1)
-        return output
+        dist.send(input, rank)
+        return input
 
     @staticmethod
     def backward(ctx, grad_output):
         rank = ctx.rank
-        dist.recv(grad_output, rank + 1)
+        dist.recv(grad_output, rank)
         return grad_output, None
 
 
@@ -22,14 +22,14 @@ class Recv(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, rank):
         ctx.rank = rank
-        dist.recv(input, rank - 1)
+        dist.recv(input, rank)
         return input
 
     @staticmethod
-    def backward(ctx, grad_input):
+    def backward(ctx, grad_output):
         rank = ctx.rank
-        dist.send(grad_input, rank - 1)
-        return grad_input, None
+        dist.send(grad_output, rank)
+        return grad_output, None
 
 
 class Pipe(torch.nn.Module):
@@ -53,10 +53,10 @@ class Pipe(torch.nn.Module):
         for x in xs:
             if not self.is_first:
                 x = x.new_empty(self.shape).requires_grad_()
-                x = Recv.apply(x, self.rank)
+                x = Recv.apply(x, self.rank - 1)
             y = self.module(x)
             if not self.is_last:
-                y = Send.apply(y, self.rank)
+                y = Send.apply(y, self.rank + 1)
             ys.append(y)
         return torch.cat(ys)
 
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     Y = net(X)
     Y.mean().backward()
     print(Y[:, -1])
-    print(net[0].w1.grad)
+    # print(net[0].w1.grad)
     net.zero_grad()
 
     net = Pipe(net, (bs, hid_dim), chunks).cuda()
@@ -88,8 +88,8 @@ if __name__ == '__main__':
     if net.is_last:
         Y.mean().backward()
     else:
-        torch.autograd.backward(Y, torch.empty_like(Y))
+        Y.backward(torch.empty_like(Y))
     if net.is_last:
         print(Y[:, -1])
-    if net.is_first:
-        print(net.module[0].w1.grad)
+    # if net.is_first:
+    #     print(net.module[0].w1.grad)

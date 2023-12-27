@@ -41,10 +41,12 @@ class TPNet(Net):
         return x
 
     @classmethod
-    def new_tp(cls, module: Net, world_size, rank):
+    def new_tp(cls, module: Net):
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
         device = next(module.parameters()).device
-        in_dim, out_dim, hidden_dim = module.w1.size(0), module.w2.size(1), module.w1.size(1)
-        tp_module = cls(in_dim, out_dim, hidden_dim // world_size).to(device)
+        in_dim, out_dim, hid_dim = module.w1.size(0), module.w2.size(1), module.w1.size(1)
+        tp_module = cls(in_dim, out_dim, hid_dim // world_size).to(device)
         tp_module.w1.data.copy_(module.w1.data.chunk(world_size, dim=1)[rank])
         tp_module.w2.data.copy_(module.w2.data.chunk(world_size, dim=0)[rank])
         return tp_module
@@ -64,7 +66,7 @@ if __name__ == '__main__':
     # print(net.w1.grad)
     net.zero_grad()
 
-    net = TPNet.new_tp(net, dist.get_world_size(), dist.get_rank())
+    net = TPNet.new_tp(net)
     Y = net(X)
     Y.mean().backward()
     print(Y[:, -1])

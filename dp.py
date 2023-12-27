@@ -67,7 +67,7 @@ if __name__ == '__main__':
     torch.cuda.manual_seed_all(666)
 
     net = Net(64, 10, 128).cuda()
-    X = torch.randn(32, 64, device="cuda", requires_grad=True)
+    X = torch.randn(32, 64, device="cuda")
     Y = net(X)
     Y.mean().backward()
     print(Y[:, -1])
