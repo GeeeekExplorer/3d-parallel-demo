@@ -41,7 +41,7 @@ class TPNet(Net):
         return x
 
     @classmethod
-    def to_tp(cls, module: Net, world_size, rank):
+    def new_tp(cls, module: Net, world_size, rank):
         device = next(module.parameters()).device
         in_dim, out_dim, hidden_dim = module.w1.size(0), module.w2.size(1), module.w1.size(1)
         tp_module = cls(in_dim, out_dim, hidden_dim // world_size).to(device)
@@ -60,11 +60,12 @@ if __name__ == '__main__':
     X = torch.randn(32, 64, device="cuda")
     Y = net(X)
     Y.mean().backward()
-    print(Y.size(), Y[:, -1])
-    # print(net.w1.size(), net.w1.grad)
+    print(Y[:, -1])
+    # print(net.w1.grad)
+    net.zero_grad()
 
-    net = TPNet.to_tp(net, dist.get_world_size(), dist.get_rank())
+    net = TPNet.new_tp(net, dist.get_world_size(), dist.get_rank())
     Y = net(X)
     Y.mean().backward()
-    print(Y.size(), Y[:, -1])
-    # print(net.w1.size(), net.w1.grad)
+    print(Y[:, -1])
+    # print(net.w1.grad)

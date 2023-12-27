@@ -1,8 +1,35 @@
 import os
 import torch
 import torch.distributed as dist
-from torch import Tensor
 from model import Net
+
+
+class Send(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, output, rank):
+        ctx.rank = rank
+        dist.send(output, rank + 1)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        rank = ctx.rank
+        dist.recv(grad_output, rank + 1)
+        return grad_output, None
+
+
+class Recv(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, rank):
+        ctx.rank = rank
+        dist.recv(input, rank - 1)
+        return input
+
+    @staticmethod
+    def backward(ctx, grad_input):
+        rank = ctx.rank
+        dist.send(grad_input, rank - 1)
+        return grad_input, None
 
 
 class Pipe(torch.nn.Module):
@@ -18,25 +45,20 @@ class Pipe(torch.nn.Module):
         self.chunks = chunks
         shape = list(shape)
         shape[0] //= chunks
-        self.register_buffer("buf", torch.empty(*shape))
+        self.shape = shape
 
-    def forward(self, x: Tensor):
+    def forward(self, x: torch.Tensor):
         ys = []
-        if self.is_first:
-            xs = x.chunk(self.chunks)
-        for i in range(self.chunks):
-            if self.is_first:
-                x = xs[i]
-            else:
-                dist.recv(self.buf, self.rank - 1)
-                x = self.buf
+        xs = x.chunk(self.chunks)
+        for x in xs:
+            if not self.is_first:
+                x = x.new_empty(self.shape).requires_grad_()
+                x = Recv.apply(x, self.rank)
             y = self.module(x)
-            if self.is_last:
-                ys.append(y)
-            else:
-                dist.send(y, self.rank + 1)
-        if self.is_last:
-            return torch.cat(ys)
+            if not self.is_last:
+                y = Send.apply(y, self.rank)
+            ys.append(y)
+        return torch.cat(ys)
 
 
 if __name__ == '__main__':
@@ -45,18 +67,28 @@ if __name__ == '__main__':
     torch.manual_seed(666)
     torch.cuda.manual_seed_all(666)
 
-    num_blocks, in_dim, out_dim, hid_dim, inter_dim = 8, 64, 10, 128, 256
-    blocks = []
-    blocks.append(Net(in_dim, hid_dim, inter_dim))
-    for _ in range(num_blocks - 2):
-        blocks.append(Net(hid_dim, hid_dim, inter_dim))
-    blocks.append(Net(hid_dim, out_dim, inter_dim))
-    net = torch.nn.Sequential(*blocks).cuda()
-    X = torch.randn(32, 64, device="cuda")
+    num_layers, in_dim, out_dim, hid_dim, inter_dim = 8, 64, 10, 128, 256
+    bs, chunks = 32, 4
+    layers = []
+    layers.append(Net(in_dim, hid_dim, inter_dim))
+    for _ in range(num_layers - 2):
+        layers.append(Net(hid_dim, hid_dim, inter_dim))
+    layers.append(Net(hid_dim, out_dim, inter_dim))
+    net = torch.nn.Sequential(*layers).cuda()
+    X = torch.randn(bs, in_dim, device="cuda")
     Y = net(X)
-    print(Y.size(), Y[:, -1])
+    Y.mean().backward()
+    print(Y[:, -1])
+    # print(net[0].w1.grad)
+    net.zero_grad()
 
-    net = Pipe(net, (32, 128), 1).cuda()
+    net = Pipe(net, (bs, hid_dim), chunks).cuda()
     Y = net(X)
     if net.is_last:
-        print(Y.size(), Y[:, -1])
+        Y.mean().backward()
+    else:
+        torch.autograd.backward(Y, torch.empty_like(Y))
+    if net.is_last:
+        print(Y[:, -1])
+    # if net.is_first:
+    #     print(net.module[0].w1.grad)

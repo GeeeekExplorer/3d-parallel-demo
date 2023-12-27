@@ -70,12 +70,13 @@ if __name__ == '__main__':
     X = torch.randn(32, 64, device="cuda", requires_grad=True)
     Y = net(X)
     Y.mean().backward()
-    print(Y.size(), Y[:, -1])
-    # print(net.w1.size(), net.w1.grad)
+    print(Y[:, -1])
+    # print(net.w1.grad)
+    net.zero_grad()
 
     net = DDP(net)
     X = X.chunk(dist.get_world_size())[dist.get_rank()]
     Y = net(X)
     Y.mean().backward()
-    print(Y.size(), Y[:, -1])
-    # print(net.module.w1.size(), net.module.w1.grad)
+    print(Y[:, -1])
+    # print(net.module.w1.grad)
