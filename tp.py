@@ -1,11 +1,10 @@
 import os
 import torch
 import torch.distributed as dist
-from torch.autograd import Function
 from model import Net
 
 
-class LinearWithAsyncComm(Function):
+class LinearWithAsyncComm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, weight):
         ctx.save_for_backward(input, weight)
@@ -23,7 +22,7 @@ class LinearWithAsyncComm(Function):
         return grad_input, grad_weight
 
 
-class AllReduce(Function):
+class AllReduce(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
         dist.all_reduce(input)
@@ -61,11 +60,11 @@ if __name__ == '__main__':
     X = torch.randn(32, 64, device="cuda")
     Y = net(X)
     Y.mean().backward()
-    print(Y[:, -1])
-    # print(net.w1.grad)
+    print(Y.size(), Y[:, -1])
+    # print(net.w1.size(), net.w1.grad)
 
     net = TPNet.to_tp(net, dist.get_world_size(), dist.get_rank())
     Y = net(X)
     Y.mean().backward()
-    print(Y[:, -1])
-    # print(net.w1.grad)
+    print(Y.size(), Y[:, -1])
+    # print(net.w1.size(), net.w1.grad)
