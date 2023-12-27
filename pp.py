@@ -68,18 +68,19 @@ if __name__ == '__main__':
     torch.cuda.manual_seed_all(666)
 
     num_layers, in_dim, out_dim, hid_dim, inter_dim = 8, 64, 10, 128, 256
-    bs, chunks = 32, 4
+    bs, chunks = 32, 8
     layers = []
     layers.append(Net(in_dim, hid_dim, inter_dim))
     for _ in range(num_layers - 2):
         layers.append(Net(hid_dim, hid_dim, inter_dim))
     layers.append(Net(hid_dim, out_dim, inter_dim))
+
     net = torch.nn.Sequential(*layers).cuda()
     X = torch.randn(bs, in_dim, device="cuda")
     Y = net(X)
     Y.mean().backward()
     print(Y[:, -1])
-    # print(net[0].w1.grad)
+    print(net[0].w1.grad)
     net.zero_grad()
 
     net = Pipe(net, (bs, hid_dim), chunks).cuda()
@@ -90,5 +91,5 @@ if __name__ == '__main__':
         torch.autograd.backward(Y, torch.empty_like(Y))
     if net.is_last:
         print(Y[:, -1])
-    # if net.is_first:
-    #     print(net.module[0].w1.grad)
+    if net.is_first:
+        print(net.module[0].w1.grad)

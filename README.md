@@ -1,2 +1,4 @@
 # parallel-demo
-使用torch.distributed实现DP/TP/PP的Demo
+使用`torch.distributed`包实现DP/TP/PP
+
+命令`torchrun --nproc_per_node=2 (dp|tp|pp).py`即可运行
