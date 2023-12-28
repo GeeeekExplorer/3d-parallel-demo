@@ -6,30 +6,54 @@ from model import Net
 
 class Send(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, rank):
+    def forward(ctx, input, rank, stream):
         ctx.rank = rank
-        dist.send(input, rank)
+        ctx.stream = stream
+        with torch.cuda.stream(stream):
+            dist.send(input, rank)
         return input
 
     @staticmethod
     def backward(ctx, grad_output):
         rank = ctx.rank
-        dist.recv(grad_output, rank)
-        return grad_output, None
+        stream = ctx.stream
+        with torch.cuda.stream(stream):
+            dist.recv(grad_output, rank)
+        return grad_output, None, None
 
 
 class Recv(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, rank):
+    def forward(ctx, input, rank, stream):
         ctx.rank = rank
-        dist.recv(input, rank)
+        ctx.stream = stream
+        with torch.cuda.stream(stream):
+            dist.recv(input, rank)
         return input
 
     @staticmethod
     def backward(ctx, grad_output):
         rank = ctx.rank
-        dist.send(grad_output, rank)
-        return grad_output, None
+        stream = ctx.stream
+        with torch.cuda.stream(stream):
+            dist.send(grad_output, rank)
+        return grad_output, None, None
+
+
+class Wait(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, stream1, stream2):
+        ctx.stream1 = stream1
+        ctx.stream2 = stream2
+        stream1.wait_stream(stream2)
+        return input
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        stream1 = ctx.stream1
+        stream2 = ctx.stream2
+        stream2.wait_stream(stream1)
+        return grad_output, None, None
 
 
 class Pipe(torch.nn.Module):
@@ -46,17 +70,23 @@ class Pipe(torch.nn.Module):
         shape = list(shape)
         shape[0] //= chunks
         self.shape = shape
+        self.send_stream = torch.cuda.Stream()
+        self.recv_stream = torch.cuda.Stream()
 
     def forward(self, x: torch.Tensor):
         ys = []
-        xs = x.chunk(self.chunks)
+        if self.is_first:
+            xs = x.chunk(self.chunks)
+        else:
+            xs = [x.new_empty(self.shape, requires_grad=True) for _ in range(self.chunks)]
         for x in xs:
             if not self.is_first:
-                x = x.new_empty(self.shape).requires_grad_()
-                x = Recv.apply(x, self.rank - 1)
+                x = Recv.apply(x, self.rank - 1, self.recv_stream)
+                x = Wait.apply(x, torch.cuda.current_stream(), self.recv_stream)
             y = self.module(x)
             if not self.is_last:
-                y = Send.apply(y, self.rank + 1)
+                y = Wait.apply(y, self.send_stream, torch.cuda.current_stream())
+                y = Send.apply(y, self.rank + 1, self.send_stream)
             ys.append(y)
         return torch.cat(ys)
 
